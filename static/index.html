@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MySQL备份管理系统</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus/dist/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/element-plus"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@element-plus/icons-vue"></script>
+</head>
+<body>
+    <div id="app">
+        <el-container>
+            <el-header>
+                <el-menu mode="horizontal" :default-active="activeIndex">
+                    <el-menu-item index="/" @click="navigateTo('/')">首页</el-menu-item>
+                    <el-menu-item index="/backup" @click="navigateTo('/backup')">数据库设置</el-menu-item>
+                </el-menu>
+            </el-header>
+            
+            <el-main>
+                <el-card class="box-card" style="margin-bottom: 20px">
+                    <template #header>
+                        <div class="card-header">
+                            <span>立即备份</span>
+                        </div>
+                    </template>
+                    <el-form>
+                        <el-form-item label="选择数据库配置">
+                            <el-select v-model="selectedSetting" @change="loadDatabases" placeholder="请选择数据库配置">
+                                <el-option v-for="setting in settings" :key="setting.id" :label="setting.name" :value="setting.id"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="选择数据库">
+                            <el-select
+                                v-model="selectedDatabases"
+                                multiple
+                                collapse-tags
+                                collapse-tags-tooltip
+                                :disabled="!selectedSetting"
+                                placeholder="请先选择数据库配置">
+                                <el-option
+                                    v-for="db in databases"
+                                    :key="db"
+                                    :label="db"
+                                    :value="db">
+                                </el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-button type="primary" @click="createBackup" :disabled="!selectedDatabases">开始备份</el-button>
+                    </el-form>
+                </el-card>
+
+                <el-card class="box-card" style="margin-bottom: 20px">
+                    <template #header>
+                        <div class="card-header">
+                            <span>定时备份</span>
+                        </div>
+                    </template>
+                    <el-form>
+                        <el-form-item label="选择数据库配置">
+                            <el-select v-model="scheduleForm.settingId" @change="loadScheduleDatabases" placeholder="请选择数据库配置">
+                                <el-option v-for="setting in settings" :key="setting.id" :label="setting.name" :value="setting.id"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="选择数据库">
+                            <el-select
+                                v-model="scheduleForm.databases"
+                                multiple
+                                collapse-tags
+                                collapse-tags-tooltip
+                                :disabled="!scheduleForm.settingId"
+                                placeholder="请先选择数据库配置">
+                                <el-option
+                                    v-for="db in scheduleDatabases"
+                                    :key="db"
+                                    :label="db"
+                                    :value="db">
+                                </el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-form-item label="Cron表达式">
+                            <el-input v-model="scheduleForm.schedule" placeholder="*/5 * * * *">
+                                <template #append>
+                                    <el-tooltip content="例如：每5分钟：*/5 * * * *，每天凌晨1点：0 1 * * *" placement="top">
+                                        <el-icon><QuestionFilled /></el-icon>
+                                    </el-tooltip>
+                                </template>
+                            </el-input>
+                        </el-form-item>
+                        <el-button type="primary" @click="scheduleBackup">添加定时任务</el-button>
+                    </el-form>
+                </el-card>
+
+                <el-card class="box-card" style="margin-bottom: 20px">
+                    <template #header>
+                        <div class="card-header">
+                            <span>定时任务列表</span>
+                            <el-button
+                                v-if="schedules.length > 0"
+                                type="danger"
+                                size="small"
+                                style="float: right"
+                                @click="deleteAllSchedules">
+                                删除所有任务
+                            </el-button>
+                        </div>
+                    </template>
+                    <el-table :data="paginatedSchedules" style="width: 100%">
+                        <el-table-column prop="id" label="ID" width="80"></el-table-column>
+                        <el-table-column prop="settingName" label="数据库配置"></el-table-column>
+                        <el-table-column prop="database" label="数据库"></el-table-column>
+                        <el-table-column prop="schedule" label="计划">
+                            <template #default="scope">
+                                <el-tooltip :content="formatCronDescription(scope.row.schedule)" placement="top">
+                                    <span>{{ scope.row.schedule }}</span>
+                                </el-tooltip>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="120">
+                            <template #default="scope">
+                                <el-button type="danger" size="small" @click="deleteSchedule(scope.row.id)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                    <div class="pagination-container" style="margin-top: 20px; text-align: right;">
+                        <el-pagination
+                            v-model:current-page="schedulesCurrentPage"
+                            v-model:page-size="schedulesPageSize"
+                            :page-sizes="[10, 20, 50, 100]"
+                            layout="total, sizes, prev, pager, next"
+                            :total="schedulesTotal"
+                            @size-change="handleSchedulesSizeChange"
+                            @current-change="handleSchedulesCurrentChange">
+                        </el-pagination>
+                    </div>
+                </el-card>
+
+                <el-card class="box-card">
+                    <template #header>
+                        <div class="card-header">
+                            <span>备份历史</span>
+                        </div>
+                    </template>
+                    <el-table :data="paginatedBackups" style="width: 100%">
+                        <el-table-column prop="settingName" label="数据库配置"></el-table-column>
+                        <el-table-column prop="dbName" label="数据库"></el-table-column>
+                        <el-table-column prop="fileName" label="文件名"></el-table-column>
+                        <el-table-column prop="createdAt" label="创建时间"></el-table-column>
+                        <el-table-column prop="status" label="状态">
+                            <template #default="scope">
+                                <el-tag :type="getStatusType(scope.row.status)">
+                                    {{ getStatusText(scope.row.status) }}
+                                </el-tag>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                    <div class="pagination-container" style="margin-top: 20px; text-align: right;">
+                        <el-pagination
+                            v-model:current-page="backupsCurrentPage"
+                            v-model:page-size="backupsPageSize"
+                            :page-sizes="[10, 20, 50, 100]"
+                            layout="total, sizes, prev, pager, next"
+                            :total="backupsTotal"
+                            @size-change="handleBackupsSizeChange"
+                            @current-change="handleBackupsCurrentChange">
+                        </el-pagination>
+                    </div>
+                </el-card>
+            </el-main>
+        </el-container>
+    </div>
+
+    <script>
+        const { createApp, ref, watch, computed } = Vue
+        const app = createApp({
+            setup() {
+                const { ElMessage, ElMessageBox } = ElementPlus
+
+                // 先声明所有的 ref
+                const settings = ref([])
+                const databases = ref([])
+                const scheduleDatabases = ref([])
+                const schedules = ref([])
+                const backups = ref([])
+                const selectedSetting = ref('')
+                const selectedDatabases = ref([])
+                const scheduleForm = ref({
+                    settingId: '',
+                    databases: [],
+                    schedule: ''
+                })
+                const activeIndex = ref(window.location.pathname)
+
+                // 分页相关的 ref
+                const schedulesCurrentPage = ref(1)
+                const schedulesPageSize = ref(10)
+                const backupsCurrentPage = ref(1)
+                const backupsPageSize = ref(10)
+
+                // 计算属性
+                const filteredSchedules = computed(() => {
+                    return schedules.value || []
+                })
+
+                const paginatedSchedules = computed(() => {
+                    return schedules.value || []
+                })
+
+                const paginatedBackups = computed(() => {
+                    return backups.value || []
+                })
+
+                // 在 setup 中添加总记录数的 ref
+                const schedulesTotal = ref(0)  // 添加总记录数
+                const backupsTotal = ref(0)    // 添加总记录数
+
+                // 加载定时任务列表
+                const loadSchedules = async () => {
+                    try {
+                        const response = await fetch(`/api/schedules?page=${schedulesCurrentPage.value}&pageSize=${schedulesPageSize.value}`)
+                        const result = await response.json()
+                        schedules.value = result.data || []
+                        schedulesTotal.value = result.total  // 保存总记录数
+                        
+                        if (scheduleForm.value.settingId) {
+                            await loadScheduleDatabases()
+                        }
+                    } catch (error) {
+                        ElMessage.error('加载定时任务失败: ' + error.message)
+                    }
+                }
+
+                // 加载备份历史
+                const loadBackups = async () => {
+                    try {
+                        const response = await fetch(`/api/backups?page=${backupsCurrentPage.value}&pageSize=${backupsPageSize.value}`)
+                        const result = await response.json()
+                        backups.value = result.data || []
+                        backupsTotal.value = result.total  // 保存总记录数
+                    } catch (error) {
+                        ElMessage.error('加载备份历史失败: ' + error.message)
+                    }
+                }
+
+                // 分页处理函数
+                const handleSchedulesSizeChange = async (val) => {
+                    schedulesPageSize.value = val
+                    schedulesCurrentPage.value = 1
+                    await loadSchedules()
+                }
+
+                const handleSchedulesCurrentChange = async (val) => {
+                    schedulesCurrentPage.value = val
+                    await loadSchedules()
+                }
+
+                const handleBackupsSizeChange = async (val) => {
+                    backupsPageSize.value = val
+                    backupsCurrentPage.value = 1
+                    await loadBackups()
+                }
+
+                const handleBackupsCurrentChange = async (val) => {
+                    backupsCurrentPage.value = val
+                    await loadBackups()
+                }
+
+                const navigateTo = (path) => {
+                    window.location.href = path
+                }
+
+                // 加载数据库配置
+                const loadSettings = async () => {
+                    try {
+                        const response = await fetch('/api/settings')
+                        settings.value = await response.json()
+                    } catch (error) {
+                        ElMessage.error('加载数据库配置失败: ' + error.message)
+                    }
+                }
+
+                // 加载数据库列表
+                const loadDatabases = async () => {
+                    if (!selectedSetting.value) {
+                        databases.value = []
+                        selectedDatabases.value = []
+                        return
+                    }
+
+                    try {
+                        const response = await fetch(`/api/databases?settingId=${selectedSetting.value}`)
+                        if (!response.ok) throw new Error('获取数据库列表失败')
+                        databases.value = await response.json()
+                    } catch (error) {
+                        ElMessage.error(error.message)
+                        databases.value = []
+                    }
+                }
+
+                // 加载定时任务的数据库列表
+                const loadScheduleDatabases = async () => {
+                    if (!scheduleForm.value.settingId) {
+                        scheduleDatabases.value = []
+                        scheduleForm.value.databases = []
+                        return
+                    }
+
+                    try {
+                        const response = await fetch(`/api/databases?settingId=${scheduleForm.value.settingId}`)
+                        if (!response.ok) throw new Error('获取数据库列表失败')
+                        const dbs = await response.json()
+                        scheduleDatabases.value = dbs || []  // 确保是数组
+                        
+                        // 重置选择
+                        scheduleForm.value.databases = []
+                    } catch (error) {
+                        ElMessage.error(error.message)
+                        scheduleDatabases.value = []
+                        scheduleForm.value.databases = []
+                    }
+                }
+
+                // 监听 scheduleForm 的 settingId 变化
+                watch(() => scheduleForm.value.settingId, (newVal) => {
+                    if (newVal) {
+                        loadScheduleDatabases()
+                    } else {
+                        scheduleDatabases.value = []
+                        scheduleForm.value.databases = []
+                    }
+                })
+
+                // 创建备份
+                const createBackup = async () => {
+                    if (!selectedSetting.value || selectedDatabases.value.length === 0) {
+                        ElMessage.warning('请选择数据库配置和至少一个数据库')
+                        return
+                    }
+
+                    try {
+                        // 创建所有选中数据库的备份任务
+                        const promises = selectedDatabases.value.map(database => 
+                            fetch('/api/backup', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    settingId: selectedSetting.value,
+                                    database: database
+                                })
+                            })
+                        )
+
+                        await Promise.all(promises)
+                        ElMessage.success('所有备份任务已创建')
+                        loadBackups()
+                    } catch (error) {
+                        ElMessage.error('创建备份失败: ' + error.message)
+                    }
+                }
+
+                // 添加定时任务
+                const scheduleBackup = async () => {
+                    const { settingId, databases, schedule } = scheduleForm.value
+                    if (!settingId || databases.length === 0 || !schedule) {
+                        ElMessage.warning('请选择数据库配置、数据库和填写计划表达式')
+                        return
+                    }
+
+                    try {
+                        let successCount = 0
+                        let errorMessages = []
+
+                        // 为每个选中的数据库创建定时任务
+                        for (const database of databases) {
+                            try {
+                                const response = await fetch('/api/schedules', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({
+                                        settingId: settingId,
+                                        database: database,
+                                        schedule: schedule
+                                    })
+                                })
+
+                                const result = await response.json()
+                                if (!response.ok) {
+                                    errorMessages.push(`${database}: ${result.error}`)
+                                } else {
+                                    successCount++
+                                }
+                            } catch (error) {
+                                errorMessages.push(`${database}: ${error.message}`)
+                            }
+                        }
+
+                        // 显示结果
+                        if (successCount > 0) {
+                            ElMessage.success(`成功添加 ${successCount} 个定时任务`)
+                        }
+                        if (errorMessages.length > 0) {
+                            ElMessage.error(`部分任务添加失败:\n${errorMessages.join('\n')}`)
+                        }
+
+                        // 重新加载定时任务列表
+                        await loadSchedules()
+                        
+                        // 如果全部成功，重置表单
+                        if (successCount === databases.length) {
+                            scheduleForm.value = { settingId: '', databases: [], schedule: '' }
+                            scheduleDatabases.value = []  // 清空数据库列表
+                        }
+                    } catch (error) {
+                        ElMessage.error('添加定时任务失败: ' + error.message)
+                    }
+                }
+
+                // 删除定时任务
+                const deleteSchedule = async (id) => {
+                    try {
+                        const response = await fetch(`/api/schedules/${id}`, {
+                            method: 'DELETE'
+                        })
+
+                        if (!response.ok) throw new Error('删除失败')
+                        ElMessage.success('定时任务已删除')
+                        loadSchedules()
+                    } catch (error) {
+                        ElMessage.error('删除定时任务失败: ' + error.message)
+                    }
+                }
+
+                // 删除所有定时任务
+                const deleteAllSchedules = async () => {
+                    try {
+                        await ElMessageBox.confirm('确定要删除所有定时任务吗？', '提示', {
+                            confirmButtonText: '确定',
+                            cancelButtonText: '取消',
+                            type: 'warning'
+                        })
+
+                        const promises = schedules.value.map(schedule => 
+                            fetch(`/api/schedules/${schedule.id}`, {
+                                method: 'DELETE'
+                            })
+                        )
+
+                        await Promise.all(promises)
+                        ElMessage.success('所有定时任务已删除')
+                        schedules.value = []  // 立即清空列表
+                        await loadSchedules() // 重新加载
+                        
+                        // 如果当前有选中的配置，重新加载数据库列表
+                        if (scheduleForm.value.settingId) {
+                            loadScheduleDatabases()
+                        }
+                    } catch (error) {
+                        if (error !== 'cancel') {  // 忽略取消操作的错误
+                            ElMessage.error('删除定时任务失败: ' + error.message)
+                        }
+                    }
+                }
+
+                // 格式化 Cron 表达式描述
+                const formatCronDescription = (cron) => {
+                    const parts = cron.split(' ')
+                    if (parts.length !== 5) return cron
+
+                    let desc = ''
+                    // 分钟
+                    if (parts[0] === '*') {
+                        desc += '每分钟'
+                    } else if (parts[0].includes('/')) {
+                        const [, interval] = parts[0].split('/')
+                        desc += `每${interval}分钟`
+                    } else {
+                        desc += `在第${parts[0]}分钟`
+                    }
+
+                    // 小时
+                    if (parts[1] === '*') {
+                        desc += ''
+                    } else if (parts[1].includes('/')) {
+                        const [, interval] = parts[1].split('/')
+                        desc += `，每${interval}小时`
+                    } else {
+                        desc += `，${parts[1]}点`
+                    }
+
+                    // 日期
+                    if (parts[2] === '*') {
+                        desc += ''
+                    } else {
+                        desc += `，${parts[2]}日`
+                    }
+
+                    // 月份
+                    if (parts[3] === '*') {
+                        desc += ''
+                    } else {
+                        desc += `，${parts[3]}月`
+                    }
+
+                    // 星期
+                    if (parts[4] === '*') {
+                        desc += ''
+                    } else {
+                        const weekdays = ['日', '一', '二', '三', '四', '五', '六']
+                        desc += `，星期${weekdays[parts[4]]}`
+                    }
+
+                    return desc || cron
+                }
+
+                // 页面加载时初始化
+                loadSettings()
+                loadSchedules()
+                loadBackups()
+
+                const getStatusType = (status) => {
+                    switch (status) {
+                        case 'completed': return 'success'
+                        case 'failed': return 'danger'
+                        case 'in_progress': return 'warning'
+                        default: return 'info'
+                    }
+                }
+
+                const getStatusText = (status) => {
+                    switch (status) {
+                        case 'completed': return '完成'
+                        case 'failed': return '失败'
+                        case 'in_progress': return '进行中'
+                        default: return status
+                    }
+                }
+
+                return {
+                    settings,
+                    databases,
+                    scheduleDatabases,
+                    schedules,
+                    backups,
+                    selectedSetting,
+                    selectedDatabases,
+                    scheduleForm,
+                    loadDatabases,
+                    loadScheduleDatabases,
+                    createBackup,
+                    scheduleBackup,
+                    deleteSchedule,
+                    deleteAllSchedules,
+                    activeIndex,
+                    navigateTo,
+                    formatCronDescription,
+                    getStatusType,
+                    getStatusText,
+                    filteredSchedules,
+                    paginatedSchedules,
+                    schedulesCurrentPage,
+                    schedulesPageSize,
+                    handleSchedulesSizeChange,
+                    handleSchedulesCurrentChange,
+                    paginatedBackups,
+                    backupsCurrentPage,
+                    backupsPageSize,
+                    handleBackupsSizeChange,
+                    handleBackupsCurrentChange,
+                    schedulesTotal,
+                    backupsTotal
+                }
+            }
+        })
+
+        // 使用 Element Plus
+        for (const [key, component] of Object.entries(ElementPlus)) {
+            app.component(key, component)
+        }
+
+        // 使用 Element Plus 图标
+        for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+            app.component(key, component)
+        }
+
+        // 挂载应用
+        app.mount('#app')
+    </script>
+</body>
+</html> 

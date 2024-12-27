@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MySQL备份管理系统 - 设置</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus/dist/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/element-plus"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@element-plus/icons-vue"></script>
+</head>
+<script>
+    const { ElMessage } = ElementPlus
+</script>
+<body>
+    <div id="app">
+        <el-container>
+            <el-header>
+                <el-menu mode="horizontal" :default-active="activeIndex">
+                    <el-menu-item index="/" @click="navigateTo('/')">首页</el-menu-item>
+                    <el-menu-item index="/backup" @click="navigateTo('/backup')">数据库设置</el-menu-item>
+                </el-menu>
+            </el-header>
+            
+            <el-main>
+                <el-card class="box-card">
+                    <template #header>
+                        <div class="card-header">
+                            <span>添加/编辑数据库配置</span>
+                        </div>
+                    </template>
+                    <el-form :model="form" label-width="120px">
+                        <el-form-item label="配置名称">
+                            <el-input v-model="form.name" placeholder="例如: 生产数据库"></el-input>
+                        </el-form-item>
+                        <el-form-item label="数据库主机">
+                            <el-input v-model="form.host" placeholder="例如: localhost"></el-input>
+                        </el-form-item>
+                        <el-form-item label="端口">
+                            <el-input-number v-model="form.port" :min="1" :max="65535" placeholder="例如: 3306"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="用户名">
+                            <el-input v-model="form.user" placeholder="例如: root"></el-input>
+                        </el-form-item>
+                        <el-form-item label="密码">
+                            <el-input v-model="form.password" type="password" show-password></el-input>
+                        </el-form-item>
+                        <el-form-item label="备份目录">
+                            <el-input v-model="form.backupDir" placeholder="例如: ./backups"></el-input>
+                        </el-form-item>
+                        <el-form-item label="最大备份数量">
+                            <el-input-number
+                                v-model="form.maxBackups"
+                                :min="0"
+                                placeholder="0表示不限制">
+                                <template #append>
+                                    <el-tooltip content="0表示不限制备份数量，大于0则会保留最新的N份备份" placement="top">
+                                        <el-icon><QuestionFilled /></el-icon>
+                                    </el-tooltip>
+                                </template>
+                            </el-input-number>
+                        </el-form-item>
+                        <el-form-item>
+                            <el-button type="primary" @click="saveSettings">保存设置</el-button>
+                            <el-button type="success" @click="testConnection">测试连接</el-button>
+                            <el-button @click="resetForm">重置</el-button>
+                        </el-form-item>
+                    </el-form>
+                </el-card>
+
+                <el-card class="box-card" style="margin-top: 20px">
+                    <template #header>
+                        <div class="card-header">
+                            <span>数据库配置列表</span>
+                        </div>
+                    </template>
+                    <el-table :data="settings" style="width: 100%">
+                        <el-table-column prop="name" label="配置名称"></el-table-column>
+                        <el-table-column prop="host" label="主机"></el-table-column>
+                        <el-table-column prop="port" label="端口"></el-table-column>
+                        <el-table-column prop="user" label="用户名"></el-table-column>
+                        <el-table-column prop="backupDir" label="备份目录"></el-table-column>
+                        <el-table-column label="操作" width="200">
+                            <template #default="scope">
+                                <el-button size="small" @click="editSetting(scope.row)">编辑</el-button>
+                                <el-button size="small" type="danger" @click="deleteSetting(scope.row.id)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </el-card>
+            </el-main>
+        </el-container>
+    </div>
+
+    <script>
+        const { createApp, ref } = Vue
+        const app = createApp({
+            setup() {
+                const settings = ref([])
+                const form = ref({
+                    id: null,
+                    name: '',
+                    host: '',
+                    port: 3306,
+                    user: '',
+                    password: '',
+                    backupDir: '',
+                    maxBackups: 0  // 默认不限制
+                })
+                const activeIndex = ref(window.location.pathname)
+                
+                const navigateTo = (path) => {
+                    window.location.href = path
+                }
+
+                // 加载设置列表
+                const loadSettings = async () => {
+                    try {
+                        const response = await fetch('/api/settings')
+                        settings.value = await response.json()
+                    } catch (error) {
+                        ElMessage.error('加载设置失败: ' + error.message)
+                    }
+                }
+
+                // 保存设置
+                const saveSettings = async () => {
+                    try {
+                        const response = await fetch('/api/settings', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(form.value)
+                        })
+
+                        if (!response.ok) throw new Error('保存失败')
+                        ElMessage.success('设置已保存')
+                        loadSettings()
+                        resetForm()
+                    } catch (error) {
+                        ElMessage.error('保存设置失败: ' + error.message)
+                    }
+                }
+
+                // 测试连接
+                const testConnection = async () => {
+                    try {
+                        const response = await fetch('/api/test-connection', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(form.value)
+                        })
+
+                        const result = await response.json()
+                        if (result.success) {
+                            ElMessage.success(result.message)
+                        } else {
+                            ElMessage.error(result.message)
+                        }
+                    } catch (error) {
+                        ElMessage.error('测试连接失败: ' + error.message)
+                    }
+                }
+
+                // 编辑设置
+                const editSetting = (setting) => {
+                    form.value = { ...setting }
+                }
+
+                // 删除设置
+                const deleteSetting = async (id) => {
+                    try {
+                        const response = await fetch(`/api/settings/${id}`, {
+                            method: 'DELETE'
+                        })
+
+                        if (!response.ok) throw new Error('删除失败')
+                        ElMessage.success('设置已删除')
+                        loadSettings()
+                    } catch (error) {
+                        ElMessage.error('删除设置失败: ' + error.message)
+                    }
+                }
+
+                // 重置表单
+                const resetForm = () => {
+                    form.value = {
+                        id: null,
+                        name: '',
+                        host: '',
+                        port: 3306,
+                        user: '',
+                        password: '',
+                        backupDir: '',
+                        maxBackups: 0
+                    }
+                }
+
+                // 页面加载时初始化
+                loadSettings()
+
+                return {
+                    settings,
+                    form,
+                    saveSettings,
+                    testConnection,
+                    editSetting,
+                    deleteSetting,
+                    resetForm,
+                    activeIndex,
+                    navigateTo
+                }
+            }
+        })
+
+        app.use(ElementPlus)
+        app.mount('#app')
+    </script>
+</body>
+</html> 
